@@ -19,7 +19,7 @@ contract ICtokenContract is ERC721, Ownable{
         uint256 netHash;   // SHA256 hash of gate-level netlist for the IC
         Stage   stage;     // production stage of the IC in the supplychain
         bool    status;    // status of the IC in the production stage
-        address prevIdx;   // address of the previous version of the ICtoken
+        uint256 prevIdx;   // address of the previous version of the ICtoken
         uint8   version;   // version number of the ICtoken
     }
 
@@ -39,8 +39,20 @@ contract ICtokenContract is ERC721, Ownable{
         myOwner   currOwner;
     }
 
+    struct TokenUpdater {
+        uint256 ECID;
+        uint256 prevECID;
+        Stage stage;
+        bool status;
+    }
+
+    struct OwnedTokens {
+        bool active;
+        mapping(uint256 => uint256) tokens;
+    }
+
     mapping(uint256 => uint256)   ECIDtoIdx;
-    mapping(address => mapping(uint256 => uint256)) ownersdb;
+    mapping(address => OwnedTokens) ownersdb;
 
     constructor() ERC721('ICtoken NFT', 'ICTOKEN') {
         ICtoken memory icToken;     // genesis token
@@ -48,8 +60,22 @@ contract ICtokenContract is ERC721, Ownable{
         ICtokenID++;
     }
 
+    function enrollOwner() external returns (bool) {
+        require (ownersdb[msg.sender].active == false, 'Address already enrolled');
+        ownersdb[msg.sender].active = true;
+        return true;
+    }
+
+    // @shashank: it doesn't look like we are signing transactions rn
+    // so this just checks that the current owner of the provided ECID is the provided ownerAddr
+    function verifyTransaxn(address ownerAddr, uint256 ECID) external view returns (bool) {
+        require (ownersdb[ownerAddr].active == true, 'Owner addr not enrolled');
+        return ownersdb[ownerAddr].tokens[ECID] > 0;
+    }
+
     function enrollIC(uint256 ECID) external returns (uint256){
         require (ECIDtoIdx[ECID] == 0, 'ECID already enrolled');
+        require(ownersdb[msg.sender].active == true, 'Owner addr not enrolled yet');
         ICtoken memory icToken;
         icToken.metaData.ECID = ECID;
         icToken.metaData.stage = Stage.Fab;
@@ -58,7 +84,29 @@ contract ICtokenContract is ERC721, Ownable{
         ICtokenChain.push(icToken);
         _safeMint(msg.sender, ICtokenID);
         ECIDtoIdx[ECID] = ICtokenID;
-        ownersdb[msg.sender][ECID] = ICtokenID;
+        ownersdb[msg.sender].tokens[ECID] = ICtokenID;
+        ICtokenID++;
+        return ICtokenID;
+    }
+
+    function updateStage(TokenUpdater memory tokenUpdater) external returns (uint256) {
+        require(ownersdb[msg.sender].active == true, 'Onwer addr not enrolled');
+        require(ECIDtoIdx[tokenUpdater.ECID] == 0, 'ECID already enrolled');
+        ICtoken memory prevToken = ICtokenChain[ECIDtoIdx[tokenUpdater.prevECID]];
+        metaData memory prevData = prevToken.metaData;
+        require(ownersdb[msg.sender].tokens[prevData.ECID] > 0, 'Cannot update unowned ECID');
+        require(tokenUpdater.stage > prevData.stage || tokenUpdater.stage == prevData.stage && tokenUpdater.status == true && prevData.status == false, 'Cannot revert to previous state');
+        ICtoken memory icToken;
+        icToken.metaData = prevData;
+        icToken.metaData.ECID = tokenUpdater.ECID;
+        icToken.metaData.stage = tokenUpdater.stage;
+        icToken.metaData.status = tokenUpdater.status;
+        icToken.metaData.prevIdx = tokenUpdater.prevECID;
+        icToken.metaData.version = prevData.version + 1;
+        ICtokenChain.push(icToken);
+        _safeMint(msg.sender, ICtokenID);
+        ECIDtoIdx[icToken.metaData.ECID] = ICtokenID;        
+        ownersdb[msg.sender].tokens[icToken.metaData.ECID] = ICtokenID;
         ICtokenID++;
         return ICtokenID;
     }
