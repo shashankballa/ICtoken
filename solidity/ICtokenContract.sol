@@ -41,6 +41,8 @@ contract ICtokenContract is ERC721, Ownable{
 
     struct TokenUpdater {
         uint256 ECID;
+        uint256 PID;
+        uint256 SID;
         uint256 prevECID;
         Stage stage;
         bool status;
@@ -110,4 +112,68 @@ contract ICtokenContract is ERC721, Ownable{
         ICtokenID++;
         return ICtokenID;
     }
+
+    function updatePIDorSID(TokenUpdater[] memory tokenUpdaters) external returns (uint256) {
+        require(ownersdb[msg.sender].active == true, 'Onwer addr not enrolled');
+        bool samePID = true;
+        bool sameSID = true;
+        for (uint i = 0; i < tokenUpdaters.length; i++) {
+            require(ECIDtoIdx[tokenUpdaters[i].ECID] != 0, 'An ECID not enrolled yet');
+            require(ownersdb[msg.sender].tokens[tokenUpdaters[i].ECID] > 0, 'Cannot update unowned ECID');
+            if (tokenUpdaters[i].PID != tokenUpdaters[0].PID) {
+                samePID = false;
+            }
+            if (tokenUpdaters[i].SID != tokenUpdaters[0].SID) {
+                sameSID = false;
+            }
+        }
+
+        require(samePID || sameSID, 'Invalid array of updating data');
+
+        if (samePID) {
+            for (uint i = 0; i < tokenUpdaters.length; i++) {
+                require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.status == false, 'All statuses should be 0');
+                require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.stage == Stage.PCBasm, 'All stages should be PCBasm');
+                require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.SID == 0, 'All chips should not have SID yet');
+                require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.PID == 0, 'All chips should not have PID yet');
+
+            }
+        } else if (sameSID) {
+            for (uint i = 0; i < tokenUpdaters.length; i++) {
+                require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.status == false, 'All statuses should be 0');
+                require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.stage == Stage.SysInt, 'All stages should be SysInt');
+                require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.PID != 0, 'All chips should have a PID already');
+                require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.SID == 0, 'All chips should not have SID yet');
+            }   
+        }
+
+        for (uint i = 0; i < tokenUpdaters.length; i++) {
+            ICtoken memory icToken = ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]];
+            if (samePID) {
+                icToken.metaData.PID = tokenUpdaters[0].PID;
+            } else {
+                icToken.metaData.SID = tokenUpdaters[0].SID;
+            }
+            icToken.metaData.version += 1;
+            ICtokenChain.push(icToken);
+            _safeMint(msg.sender, ICtokenID);
+            ICtokenID++;
+        }
+
+        return ICtokenID - 1;
+    }
+
+    function transferIC(uint256 ECID, address nextOwner) external returns (uint256) {
+        require(ownersdb[nextOwner].active == true, 'Next owner addr not enrolled');
+        require(ECIDtoIdx[ECID] != 0, 'ECID must be enrolled');
+        require(ownersdb[msg.sender].tokens[ECID] > 0, 'ECID must belong to current owner');
+        ICtoken memory icToken = ICtokenChain[ECIDtoIdx[ECID]];
+        icToken.currOwner.addrss = nextOwner;
+        icToken.metaData.version += 1;
+        ICtokenChain.push(icToken);
+        safeTransferFrom(msg.sender, nextOwner, ICtokenID);
+        ICtokenID++;
+
+        return ICtokenID;
+    } 
 }
