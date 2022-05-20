@@ -21,6 +21,7 @@ contract ICtokenContract is ERC721, Ownable{
         bool    status;    // status of the IC in the production stage
         uint256 prevIdx;   // address of the previous version of the ICtoken
         uint8   version;   // version number of the ICtoken
+        bool    defective; // whether the IC is defective or not 
     }
 
     struct ICkey{          // Implementation of the ICkey object
@@ -53,8 +54,15 @@ contract ICtokenContract is ERC721, Ownable{
         mapping(uint256 => uint256) tokens;
     }
 
+    struct IDs {
+        bool active;
+        uint256[] IDs;
+    }
+
     mapping(uint256 => uint256)   ECIDtoIdx;
     mapping(address => OwnedTokens) ownersdb;
+    mapping(uint256 => IDs) PCBdb;
+    mapping(uint256 => IDs) SYSdb;
 
     constructor() ERC721('ICtoken NFT', 'ICTOKEN') {
         ICtoken memory icToken;     // genesis token
@@ -93,22 +101,20 @@ contract ICtokenContract is ERC721, Ownable{
 
     function updateStage(TokenUpdater memory tokenUpdater) external returns (uint256) {
         require(ownersdb[msg.sender].active == true, 'Onwer addr not enrolled');
-        require(ECIDtoIdx[tokenUpdater.ECID] == 0, 'ECID already enrolled');
         ICtoken memory prevToken = ICtokenChain[ECIDtoIdx[tokenUpdater.prevECID]];
         metaData memory prevData = prevToken.metaData;
         require(ownersdb[msg.sender].tokens[prevData.ECID] > 0, 'Cannot update unowned ECID');
         require(tokenUpdater.stage > prevData.stage || tokenUpdater.stage == prevData.stage && tokenUpdater.status == true && prevData.status == false, 'Cannot revert to previous state');
+        require(prevData.defective == false, 'Cannot update stage of defective IC');
         ICtoken memory icToken;
         icToken.metaData = prevData;
-        icToken.metaData.ECID = tokenUpdater.ECID;
         icToken.metaData.stage = tokenUpdater.stage;
         icToken.metaData.status = tokenUpdater.status;
-        icToken.metaData.prevIdx = tokenUpdater.prevECID;
+        icToken.metaData.prevIdx = ECIDtoIdx[tokenUpdater.prevECID];
         icToken.metaData.version = prevData.version + 1;
         ICtokenChain.push(icToken);
         _safeMint(msg.sender, ICtokenID);
         ECIDtoIdx[icToken.metaData.ECID] = ICtokenID;        
-        ownersdb[msg.sender].tokens[icToken.metaData.ECID] = ICtokenID;
         ICtokenID++;
         return ICtokenID;
     }
@@ -120,6 +126,7 @@ contract ICtokenContract is ERC721, Ownable{
         for (uint i = 0; i < tokenUpdaters.length; i++) {
             require(ECIDtoIdx[tokenUpdaters[i].ECID] != 0, 'An ECID not enrolled yet');
             require(ownersdb[msg.sender].tokens[tokenUpdaters[i].ECID] > 0, 'Cannot update unowned ECID');
+            require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.defective == false, 'Cannot update defective IC');
             if (tokenUpdaters[i].PID != tokenUpdaters[0].PID) {
                 samePID = false;
             }
@@ -131,6 +138,7 @@ contract ICtokenContract is ERC721, Ownable{
         require(samePID || sameSID, 'Invalid array of updating data');
 
         if (samePID) {
+            require(PCBdb[tokenUpdaters[0].PID].active == false, 'PID already exists');
             for (uint i = 0; i < tokenUpdaters.length; i++) {
                 require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.status == false, 'All statuses should be 0');
                 require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.stage == Stage.PCBasm, 'All stages should be PCBasm');
@@ -139,6 +147,7 @@ contract ICtokenContract is ERC721, Ownable{
 
             }
         } else if (sameSID) {
+            require(SYSdb[tokenUpdaters[0].SID].active == false, 'PID already exists');
             for (uint i = 0; i < tokenUpdaters.length; i++) {
                 require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.status == false, 'All statuses should be 0');
                 require(ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]].metaData.stage == Stage.SysInt, 'All stages should be SysInt');
@@ -147,33 +156,68 @@ contract ICtokenContract is ERC721, Ownable{
             }   
         }
 
+        if (samePID) {
+            PCBdb[tokenUpdaters[0].PID].active = true;
+        } else {
+            SYSdb[tokenUpdaters[0].SID].active = true;
+        }
+
         for (uint i = 0; i < tokenUpdaters.length; i++) {
             ICtoken memory icToken = ICtokenChain[ECIDtoIdx[tokenUpdaters[i].ECID]];
             if (samePID) {
                 icToken.metaData.PID = tokenUpdaters[0].PID;
+                PCBdb[tokenUpdaters[0].PID].IDs.push(ECIDtoIdx[tokenUpdaters[i].ECID]);
             } else {
                 icToken.metaData.SID = tokenUpdaters[0].SID;
+                SYSdb[tokenUpdaters[0].SID].IDs.push(ECIDtoIdx[tokenUpdaters[i].ECID]);
+
             }
             icToken.metaData.version += 1;
+            icToken.metaData.prevIdx = ECIDtoIdx[icToken.metaData.ECID];
+            ECIDtoIdx[icToken.metaData.ECID] = ICtokenID;
             ICtokenChain.push(icToken);
             _safeMint(msg.sender, ICtokenID);
             ICtokenID++;
         }
 
-        return ICtokenID - 1;
+        return ICtokenID;
     }
 
     function transferIC(uint256 ECID, address nextOwner) external returns (uint256) {
         require(ownersdb[nextOwner].active == true, 'Next owner addr not enrolled');
+        require(ownersdb[msg.sender].active == true, 'Onwer addr not enrolled');
         require(ECIDtoIdx[ECID] != 0, 'ECID must be enrolled');
         require(ownersdb[msg.sender].tokens[ECID] > 0, 'ECID must belong to current owner');
+        require(ICtokenChain[ECIDtoIdx[ECID]].metaData.defective == false, 'Cannot update defective IC');
+        require(ICtokenChain[ECIDtoIdx[ECID]].metaData.status == true, 'Can only transfer ICs with status 1');
         ICtoken memory icToken = ICtokenChain[ECIDtoIdx[ECID]];
         icToken.currOwner.addrss = nextOwner;
         icToken.metaData.version += 1;
+        icToken.metaData.prevIdx = ECIDtoIdx[ECID];
+        ECIDtoIdx[ECID] = ICtokenID;
         ICtokenChain.push(icToken);
+        ownersdb[msg.sender].tokens[ECID] = 0;
+        ownersdb[nextOwner].tokens[ECID] = ICtokenID;
         safeTransferFrom(msg.sender, nextOwner, ICtokenID);
         ICtokenID++;
 
         return ICtokenID;
     } 
+
+    function refurbishIC(uint256 ECID) external returns (uint256) {
+        require(ownersdb[msg.sender].active == true, 'Onwer addr not enrolled');
+        require(ECIDtoIdx[ECID] != 0, 'ECID must be enrolled');
+        require(ICtokenChain[ECIDtoIdx[ECID]].metaData.defective == false, 'Cannot update defective IC');
+        require(ICtokenChain[ECIDtoIdx[ECID]].metaData.stage == Stage.EndUsr && ICtokenChain[ECIDtoIdx[ECID]].metaData.status == true, 'Can only refurbish ICs in 4/1 stage');
+        ICtoken memory icToken = ICtokenChain[ECIDtoIdx[ECID]];
+        icToken.metaData.version += 1;
+        icToken.metaData.stage = Stage.SysInt;
+        icToken.metaData.status = false;
+        icToken.metaData.prevIdx = ECIDtoIdx[ECID];
+        ECIDtoIdx[ECID] = ICtokenID;
+        ICtokenChain.push(icToken);
+        _safeMint(msg.sender, ICtokenID);
+        ICtokenID++;
+        return ICtokenID;
+    }
 }
