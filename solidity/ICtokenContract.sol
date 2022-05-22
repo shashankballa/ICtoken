@@ -198,7 +198,7 @@ contract ICtokenContract is ERC721, Ownable{
         ICtokenChain.push(icToken);
         ownersdb[msg.sender].tokens[ECID] = 0;
         ownersdb[nextOwner].tokens[ECID] = ICtokenID;
-        safeTransferFrom(msg.sender, nextOwner, ICtokenID);
+        _safeMint(msg.sender, nextOwner, ICtokenID);
         ICtokenID++;
 
         return ICtokenID;
